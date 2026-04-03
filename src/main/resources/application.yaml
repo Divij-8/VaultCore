@@ -1,0 +1,16 @@
+spring:
+  application:
+    name: vaultcore-ledger
+
+  datasource:
+    url: jdbc:postgresql://localhost:5432/vaultcore
+    username: divijmazumdar
+    password:
+
+  jpa:
+    hibernate:
+      ddl-auto: none
+
+  flyway:
+    enabled: true
+
