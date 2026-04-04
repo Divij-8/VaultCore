@@ -1,7 +1,6 @@
 package com.vaultcore.ledger.domain;
 
 import jakarta.persistence.*;
-import jakarta.persistence.criteria.CriteriaBuilder.In;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
