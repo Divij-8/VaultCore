@@ -30,7 +30,7 @@ public class LedgerEntry {
 
     @Enumerated(EnumType.STRING)
     @Column(name = "entry_type", nullable = false)
-    private EntryType entryType;
+    private LedgerEntryType entryType;
 
     @Column(nullable = false, precision = 19, scale = 4)
     private BigDecimal amount;
