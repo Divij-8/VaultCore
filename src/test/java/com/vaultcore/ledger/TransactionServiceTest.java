@@ -24,13 +24,11 @@ class TransactionServiceTest {
 
     @Test
     void shouldTransferMoneyCorrectly() {
-        // 🔹 Create user first
         User user = new User();
         user.setName("Test User");
         user.setPhoneNumber("+1" + System.currentTimeMillis());
         user = userRepository.save(user);
 
-        // 🔹 Create accounts with shorter account numbers (limit is 20 chars)
         Account acc1 = new Account();
         acc1.setAccountNumber("ACC" + System.nanoTime());
         acc1.setAccountType(AccountType.USER);
@@ -45,7 +43,6 @@ class TransactionServiceTest {
         acc2.setUser(user);
         acc2 = accountRepository.save(acc2);
         
-        // 🔹 Perform transaction
         transactionService.createTransaction(
                 "idem-" + UUID.randomUUID(),
                 "ref-" + UUID.randomUUID(),
@@ -54,11 +51,9 @@ class TransactionServiceTest {
                 acc2.getId()
         );
         
-        // 🔹 Check balance
         var balance1 = balanceService.getBalance(acc1.getId());
         var balance2 = balanceService.getBalance(acc2.getId());
         
-        // 🔹 Assertions
         assertThat(balance1).isEqualByComparingTo(new BigDecimal("-500"));
         assertThat(balance2).isEqualByComparingTo(new BigDecimal("500"));
     }

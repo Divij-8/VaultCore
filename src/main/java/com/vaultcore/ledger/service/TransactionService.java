@@ -1,78 +1,74 @@
 package com.vaultcore.ledger.service;
+
 import com.vaultcore.ledger.domain.*;
 import com.vaultcore.ledger.repository.*;
 import jakarta.transaction.Transactional;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
+
 import java.math.BigDecimal;
 import java.util.UUID;
 
 @Service
 @RequiredArgsConstructor
 public class TransactionService {
+
     private final TransactionRepository transactionRepository;
     private final LedgerEntryRepository ledgerEntryRepository;
     private final AccountRepository accountRepository;
+    private final BalanceService balanceService;
 
     @Transactional
-public Transaction createTransaction(
-        String idempotencyKey,
-        String referenceId,
-        BigDecimal amount,
-        UUID fromAccountId,
-        UUID toAccountId
-) {
+    public Transaction createTransaction(
+            String idempotencyKey,
+            String referenceId,
+            BigDecimal amount,
+            UUID fromAccountId,
+            UUID toAccountId
+    ) {
 
-    if (transactionRepository.findByIdempotencyKey(idempotencyKey).isPresent()) {
-        throw new IllegalArgumentException("Duplicate transaction");
-    }
+        if (transactionRepository.findByIdempotencyKey(idempotencyKey).isPresent()) {
+            throw new IllegalArgumentException("Duplicate transaction request");
+        }
 
-    if (amount.compareTo(BigDecimal.ZERO) <= 0) {
-        throw new IllegalArgumentException("Amount must be > 0");
-    }
+        Account fromAccount = accountRepository.findById(fromAccountId)
+                .orElseThrow(() -> new IllegalArgumentException("From account not found"));
 
-    if (fromAccountId.equals(toAccountId)) {
-        throw new IllegalArgumentException("Same account transfer not allowed");
-    }
+        Account toAccount = accountRepository.findById(toAccountId)
+                .orElseThrow(() -> new IllegalArgumentException("To account not found"));
 
-    Account fromAccount = accountRepository.findById(fromAccountId)
-            .orElseThrow(() -> new IllegalArgumentException("From account not found"));
+        BigDecimal balance = balanceService.getBalance(fromAccountId);
 
-    Account toAccount = accountRepository.findById(toAccountId)
-            .orElseThrow(() -> new IllegalArgumentException("To account not found"));
+        if (balance.compareTo(amount) < 0) {
+            throw new IllegalArgumentException("Insufficient balance");
+        }
 
-    Transaction transaction = new Transaction();
-    transaction.setIdempotencyKey(idempotencyKey);
-    transaction.setReferenceId(referenceId);
-    transaction.setAmount(amount);
-    transaction.setStatus(TransactionStatus.PENDING);
+        Transaction transaction = new Transaction();
+        transaction.setIdempotencyKey(idempotencyKey);
+        transaction.setReferenceId(referenceId);
+        transaction.setAmount(amount);
+        transaction.setStatus(TransactionStatus.PENDING);
 
-    transaction = transactionRepository.save(transaction);
+        transaction = transactionRepository.save(transaction);
 
-    try {
+        LedgerEntry debitEntry = new LedgerEntry();
+        debitEntry.setTransaction(transaction);
+        debitEntry.setAccount(fromAccount);
+        debitEntry.setEntryType(LedgerEntryType.DEBIT);
+        debitEntry.setAmount(amount);
 
-        LedgerEntry debit = new LedgerEntry();
-        debit.setTransaction(transaction);
-        debit.setAccount(fromAccount);
-        debit.setEntryType(LedgerEntryType.DEBIT);
-        debit.setAmount(amount);
+        ledgerEntryRepository.save(debitEntry);
 
-        LedgerEntry credit = new LedgerEntry();
-        credit.setTransaction(transaction);
-        credit.setAccount(toAccount);
-        credit.setEntryType(LedgerEntryType.CREDIT);
-        credit.setAmount(amount);
+        LedgerEntry creditEntry = new LedgerEntry();
+        creditEntry.setTransaction(transaction);
+        creditEntry.setAccount(toAccount);
+        creditEntry.setEntryType(LedgerEntryType.CREDIT);
+        creditEntry.setAmount(amount);
 
-        ledgerEntryRepository.save(debit);
-        ledgerEntryRepository.save(credit);
+        ledgerEntryRepository.save(creditEntry);
 
         transaction.setStatus(TransactionStatus.COMPLETED);
 
-    } catch (Exception e) {
-        transaction.setStatus(TransactionStatus.FAILED);
-        throw e;
+        return transactionRepository.save(transaction);
     }
-
-    return transactionRepository.save(transaction);
-}
 }
