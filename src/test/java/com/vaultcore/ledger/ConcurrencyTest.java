@@ -26,7 +26,6 @@ class ConcurrencyTest {
         user.setPhoneNumber("TEST-" + System.currentTimeMillis());
         user = userRepository.save(user);
         
-        // Create account to test
         Account tempAcc1 = new Account();
         tempAcc1.setAccountNumber("ACC1");
         tempAcc1.setUser(user);
@@ -41,7 +40,6 @@ class ConcurrencyTest {
         tempAcc2.setStatus(AccountStatus.ACTIVE);
         final Account acc2 = accountRepository.save(tempAcc2);
         
-        // Manually create initial balance for acc1 (simulating system funding)
         LedgerEntry initialCredit = new LedgerEntry();
         initialCredit.setAccount(acc1);
         initialCredit.setEntryType(LedgerEntryType.CREDIT);
@@ -53,14 +51,12 @@ class ConcurrencyTest {
         ExecutorService executor = Executors.newFixedThreadPool(2);
         Runnable task = () -> {
             try {
-                // Try to withdraw 800 from acc1 (which has 1000)
-                // Both threads will try simultaneously
                 transactionService.createTransaction(
                         UUID.randomUUID().toString(),
                         UUID.randomUUID().toString(),
                         new BigDecimal("800"),
-                        acc1.getId(), // FROM acc1
-                        acc2.getId()  // TO acc2
+                        acc1.getId(), 
+                        acc2.getId()  
                 );
                 System.out.println("✅ Transaction succeeded");
             } catch (Exception e) {
