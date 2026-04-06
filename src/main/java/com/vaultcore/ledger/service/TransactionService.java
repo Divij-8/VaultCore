@@ -66,7 +66,7 @@ public Transaction createTransaction(
         ledgerEntryRepository.save(debit);
         ledgerEntryRepository.save(credit);
 
-        transaction.setStatus(TransactionStatus.SUCCESS);
+        transaction.setStatus(TransactionStatus.COMPLETED);
 
     } catch (Exception e) {
         transaction.setStatus(TransactionStatus.FAILED);
