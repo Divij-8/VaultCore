@@ -2,6 +2,9 @@ package com.vaultcore.ledger;
 import com.vaultcore.ledger.domain.*;
 import com.vaultcore.ledger.repository.*;
 import com.vaultcore.ledger.service.*;
+
+import jakarta.transaction.Transactional;
+
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -9,6 +12,7 @@ import java.math.BigDecimal;
 import java.util.UUID;
 import java.util.concurrent.*;
 @SpringBootTest
+@Transactional
 class ConcurrencyTest {
     @Autowired
     private TransactionService transactionService;
