@@ -1,16 +1,12 @@
 spring:
   application:
     name: vaultcore-ledger
-
   datasource:
-    url: jdbc:postgresql://localhost:5432/vaultcore
-    username: divijmazumdar
-    password:
-
+    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5432/vaultcore}
+    username: ${SPRING_DATASOURCE_USERNAME:divijmazumdar}
+    password: ${SPRING_DATASOURCE_PASSWORD:}
   jpa:
     hibernate:
       ddl-auto: none
-
   flyway:
-    enabled: true
-
+    enabled: ${SPRING_FLYWAY_ENABLED:true}
