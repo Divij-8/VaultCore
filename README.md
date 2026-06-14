@@ -326,12 +326,13 @@ Push to `main` or open a PR to trigger the CI pipeline at `.github/workflows/ci.
 
 ## Screenshots
 
+![Swagger UI](screenshots/swagger-ui.png)
+
 > *Swagger UI:* `http://localhost:8080/swagger-ui.html`
 >
 > *Health check:* `GET /actuator/health`
 >
 > *Prometheus metrics:* `GET /actuator/prometheus`
 >
-> ![Swagger UI](https://img.shields.io/badge/Swagger-Open%20API-brightgreen)
 > ![Spring Boot](https://img.shields.io/badge/Spring%20Boot-4.0.3-brightgreen)
 > ![Java](https://img.shields.io/badge/Java-21-blue)
