@@ -326,7 +326,7 @@ Push to `main` or open a PR to trigger the CI pipeline at `.github/workflows/ci.
 
 ## Screenshots
 
-![Swagger UI](screenshots/swagger-ui.png)
+![Swagger UI](screenshots/Screenshot%202026-06-14%20at%201.47.57%E2%80%AFPM.png)
 
 > *Swagger UI:* `http://localhost:8080/swagger-ui.html`
 >
