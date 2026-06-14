@@ -1,5 +1,6 @@
 package com.vaultcore.ledger.service;
 
+import com.vaultcore.ledger.config.LedgerMetrics;
 import com.vaultcore.ledger.domain.LedgerEntryType;
 import com.vaultcore.ledger.repository.LedgerEntryRepository;
 import lombok.RequiredArgsConstructor;
@@ -12,10 +13,14 @@ import java.util.UUID;
 @RequiredArgsConstructor
 public class BalanceService {
     private final LedgerEntryRepository ledgerEntryRepository;
+    private final LedgerMetrics ledgerMetrics;
 
     public BigDecimal getBalance(UUID accountId) {
-        BigDecimal credits = ledgerEntryRepository.sumAmountByAccountIdAndEntryType(accountId, LedgerEntryType.CREDIT);
-        BigDecimal debits = ledgerEntryRepository.sumAmountByAccountIdAndEntryType(accountId, LedgerEntryType.DEBIT);
-        return credits.subtract(debits);
+        return ledgerMetrics.recordBalanceQueryDuration(() -> {
+            ledgerMetrics.recordBalanceQuery();
+            BigDecimal credits = ledgerEntryRepository.sumAmountByAccountIdAndEntryType(accountId, LedgerEntryType.CREDIT);
+            BigDecimal debits = ledgerEntryRepository.sumAmountByAccountIdAndEntryType(accountId, LedgerEntryType.DEBIT);
+            return credits.subtract(debits);
+        });
     }
 }

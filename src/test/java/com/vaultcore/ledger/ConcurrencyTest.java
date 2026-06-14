@@ -28,6 +28,8 @@ class ConcurrencyTest {
         User user = new User();
         user.setName("Test User");
         user.setPhoneNumber("TEST-" + System.currentTimeMillis());
+        user.setPassword("password");
+        user.setRoles("USER");
         user = userRepository.save(user);
         
         Account tempAcc1 = new Account();

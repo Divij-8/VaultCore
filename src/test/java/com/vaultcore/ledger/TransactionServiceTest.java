@@ -29,6 +29,8 @@ class TransactionServiceTest {
         User user = new User();
         user.setName("Test User");
         user.setPhoneNumber("+1" + System.currentTimeMillis());
+        user.setPassword("password");
+        user.setRoles("USER");
         user = userRepository.save(user);
         Account acc1 = new Account();
         acc1.setAccountNumber("ACC" + System.nanoTime());

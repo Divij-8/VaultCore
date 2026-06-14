@@ -10,3 +10,37 @@ spring:
       ddl-auto: none
   flyway:
     enabled: ${SPRING_FLYWAY_ENABLED:true}
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD:}
+      timeout: 2000
+      lettuce:
+        pool:
+          max-active: 8
+          max-idle: 4
+          min-idle: 1
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus,metrics
+  endpoint:
+    health:
+      show-details: always
+  metrics:
+    tags:
+      application: ${spring.application.name}
+    export:
+      prometheus:
+        enabled: true
+
+app:
+  jwt:
+    secret: ${JWT_SECRET:Yn2kjibddFAWtnPJ2AFlL8WXmohJMCvigQggaEypa5E=}
+    expiration: ${JWT_EXPIRATION:86400000}
+  ratelimit:
+    max-requests: ${RATE_LIMIT_MAX_REQUESTS:100}
+    window-minutes: ${RATE_LIMIT_WINDOW_MINUTES:1}

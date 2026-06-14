@@ -1,5 +1,7 @@
 package com.vaultcore.ledger.service;
 
+import com.vaultcore.ledger.config.IdempotencyCache;
+import com.vaultcore.ledger.config.LedgerMetrics;
 import com.vaultcore.ledger.domain.*;
 import com.vaultcore.ledger.repository.*;
 import jakarta.transaction.Transactional;
@@ -18,6 +20,8 @@ public class TransactionService {
     private final LedgerEntryRepository ledgerEntryRepository;
     private final AccountRepository accountRepository;
     private final BalanceService balanceService;
+    private final IdempotencyCache idempotencyCache;
+    private final LedgerMetrics ledgerMetrics;
 
     @Transactional
     public Transaction createTransaction(
@@ -45,79 +49,85 @@ public class TransactionService {
             UUID toAccountId
     ) {
 
-        Optional<Transaction> existingTransaction =
-                transactionRepository.findByIdempotencyKey(idempotencyKey);
+        return ledgerMetrics.recordTransactionDuration(() -> {
 
-        if (existingTransaction.isPresent()) {
-            return existingTransaction.get();
-        }
+            if (idempotencyCache.isDuplicate(idempotencyKey)) {
+                ledgerMetrics.recordIdempotentHit();
+                Optional<UUID> cachedId = idempotencyCache.getTransactionId(idempotencyKey);
+                if (cachedId.isPresent()) {
+                    return transactionRepository.findById(cachedId.get())
+                            .orElseThrow(() -> new IllegalArgumentException("Transaction not found"));
+                }
+            }
 
-        UUID firstLockId;
-        UUID secondLockId;
+            Optional<Transaction> existingTransaction =
+                    transactionRepository.findByIdempotencyKey(idempotencyKey);
 
-        // Ensure consistent lock ordering
-        if (fromAccountId.compareTo(toAccountId) < 0) {
-            firstLockId = fromAccountId;
-            secondLockId = toAccountId;
-        } else {
-            firstLockId = toAccountId;
-            secondLockId = fromAccountId;
-        }
+            if (existingTransaction.isPresent()) {
+                idempotencyCache.record(idempotencyKey, existingTransaction.get().getId());
+                ledgerMetrics.recordIdempotentHit();
+                return existingTransaction.get();
+            }
 
-        // Acquire locks
-        Account firstAccount = accountRepository.findByIdWithLock(firstLockId)
-                .orElseThrow(() -> new IllegalArgumentException("Account not found"));
+            UUID firstLockId;
+            UUID secondLockId;
 
-        Account secondAccount = accountRepository.findByIdWithLock(secondLockId)
-                .orElseThrow(() -> new IllegalArgumentException("Account not found"));
+            if (fromAccountId.compareTo(toAccountId) < 0) {
+                firstLockId = fromAccountId;
+                secondLockId = toAccountId;
+            } else {
+                firstLockId = toAccountId;
+                secondLockId = fromAccountId;
+            }
 
-        // Map accounts correctly
-        Account fromAccount =
-                fromAccountId.equals(firstLockId) ? firstAccount : secondAccount;
+            Account firstAccount = accountRepository.findByIdWithLock(firstLockId)
+                    .orElseThrow(() -> new IllegalArgumentException("Account not found"));
 
-        Account toAccount =
-                toAccountId.equals(firstLockId) ? firstAccount : secondAccount;
+            Account secondAccount = accountRepository.findByIdWithLock(secondLockId)
+                    .orElseThrow(() -> new IllegalArgumentException("Account not found"));
 
-        // Check balance after locking
-        BigDecimal balance = balanceService.getBalance(fromAccountId);
+            Account fromAccount =
+                    fromAccountId.equals(firstLockId) ? firstAccount : secondAccount;
 
-        if (balance.compareTo(amount) < 0) {
-            throw new IllegalArgumentException("Insufficient balance");
-        }
+            Account toAccount =
+                    toAccountId.equals(firstLockId) ? firstAccount : secondAccount;
 
-        // Create transaction
-        Transaction transaction = new Transaction();
+            BigDecimal balance = balanceService.getBalance(fromAccountId);
 
-        transaction.setIdempotencyKey(idempotencyKey);
-        transaction.setReferenceId(referenceId);
-        transaction.setAmount(amount);
-        transaction.setStatus(TransactionStatus.PENDING);
+            if (balance.compareTo(amount) < 0) {
+                ledgerMetrics.recordTransactionFailed();
+                throw new IllegalArgumentException("Insufficient balance");
+            }
 
-        transaction = transactionRepository.save(transaction);
+            Transaction transaction = new Transaction();
+            transaction.setIdempotencyKey(idempotencyKey);
+            transaction.setReferenceId(referenceId);
+            transaction.setAmount(amount);
+            transaction.setStatus(TransactionStatus.PENDING);
+            transaction = transactionRepository.save(transaction);
 
-        // Debit entry
-        LedgerEntry debitEntry = new LedgerEntry();
+            LedgerEntry debitEntry = new LedgerEntry();
+            debitEntry.setTransaction(transaction);
+            debitEntry.setAccount(fromAccount);
+            debitEntry.setEntryType(LedgerEntryType.DEBIT);
+            debitEntry.setAmount(amount);
+            ledgerEntryRepository.save(debitEntry);
 
-        debitEntry.setTransaction(transaction);
-        debitEntry.setAccount(fromAccount);
-        debitEntry.setEntryType(LedgerEntryType.DEBIT);
-        debitEntry.setAmount(amount);
+            LedgerEntry creditEntry = new LedgerEntry();
+            creditEntry.setTransaction(transaction);
+            creditEntry.setAccount(toAccount);
+            creditEntry.setEntryType(LedgerEntryType.CREDIT);
+            creditEntry.setAmount(amount);
+            ledgerEntryRepository.save(creditEntry);
 
-        ledgerEntryRepository.save(debitEntry);
+            transaction.setStatus(TransactionStatus.COMPLETED);
+            transaction = transactionRepository.save(transaction);
 
-        // Credit entry
-        LedgerEntry creditEntry = new LedgerEntry();
+            idempotencyCache.record(idempotencyKey, transaction.getId());
+            ledgerMetrics.recordTransactionCreated();
+            ledgerMetrics.recordTransactionSucceeded();
 
-        creditEntry.setTransaction(transaction);
-        creditEntry.setAccount(toAccount);
-        creditEntry.setEntryType(LedgerEntryType.CREDIT);
-        creditEntry.setAmount(amount);
-
-        ledgerEntryRepository.save(creditEntry);
-
-        // Complete transaction
-        transaction.setStatus(TransactionStatus.COMPLETED);
-
-        return transactionRepository.save(transaction);
+            return transaction;
+        });
     }
 }
