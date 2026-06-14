@@ -9,6 +9,7 @@ import com.vaultcore.ledger.service.AccountService;
 import com.vaultcore.ledger.service.BalanceService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import org.springdoc.core.annotations.ParameterObject;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.web.PageableDefault;
@@ -47,7 +48,7 @@ public class AccountController {
     @GetMapping("/{accountId}/transactions")
     public Page<TransactionHistoryResponse> getTransactionHistory(
             @PathVariable UUID accountId,
-            @PageableDefault(size = 20, sort = "createdAt") Pageable pageable
+            @ParameterObject @PageableDefault(size = 20, sort = "createdAt") Pageable pageable
     ) {
         return accountService.getTransactionHistory(accountId, pageable);
     }
