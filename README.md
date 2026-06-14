@@ -182,6 +182,8 @@ Open [http://localhost:8080/swagger-ui.html](http://localhost:8080/swagger-ui.ht
 
 Click the **Authorize** button at the top right and paste `Bearer <token>` to authenticate all requests from Swagger UI.
 
+![Swagger UI](/Users/divijmazumdar/Desktop/Screenshot 2026-06-14 at 1.47.57 PM.png)
+
 ---
 
 ## API Reference
