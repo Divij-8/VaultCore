@@ -118,6 +118,7 @@ Save the `id` and `accountNumber` from the response.
 
 ```bash
 ACCOUNT_ID="<account id from step 4>"
+ACCOUNT_NUM="<accountNumber from step 4>"
 
 curl -s -X POST http://localhost:8080/api/accounts/$ACCOUNT_ID/seed \
   -H "Content-Type: application/json" \
@@ -128,7 +129,7 @@ curl -s -X POST http://localhost:8080/api/accounts/$ACCOUNT_ID/seed \
 ### 6. Check balance
 
 ```bash
-curl -s http://localhost:8080/api/accounts/$ACCOUNT_ID/balance \
+curl -s "http://localhost:8080/api/accounts/$ACCOUNT_ID/balance" \
   -H "$AUTH" | jq
 ```
 
@@ -136,22 +137,32 @@ curl -s http://localhost:8080/api/accounts/$ACCOUNT_ID/balance \
 
 ```bash
 # Create a second account first
-curl -s -X POST http://localhost:8080/api/accounts \
+ACC2=$(curl -s -X POST http://localhost:8080/api/accounts \
   -H "Content-Type: application/json" \
   -H "$AUTH" \
-  -d "{\"userId\":\"$USER_ID\",\"accountType\":\"USER\"}" | jq
+  -d "{\"userId\":\"$USER_ID\",\"accountType\":\"USER\"}" | jq)
+echo "$ACC2" | jq .
+ACC2_ID=$(echo "$ACC2" | jq -r '.id')
+ACC2_NUM=$(echo "$ACC2" | jq -r '.accountNumber')
 
-SAVE_ACC2_ID="<second account id>"
-
+# Transfer by UUID
 curl -s -X POST http://localhost:8080/api/transactions/transfer \
   -H "Content-Type: application/json" \
   -H "$AUTH" \
   -d "{
     \"fromAccountId\":\"$ACCOUNT_ID\",
-    \"toAccountId\":\"$SAVE_ACC2_ID\",
-    \"amount\":2500,
-    \"referenceId\":\"ref-$(uuidgen)\",
-    \"idempotencyKey\":\"idem-$(uuidgen)\"
+    \"toAccountId\":\"$ACC2_ID\",
+    \"amount\":2500
+  }" | jq
+
+# Transfer by account number (easier for demos)
+curl -s -X POST http://localhost:8080/api/transactions/transfer-by-account-number \
+  -H "Content-Type: application/json" \
+  -H "$AUTH" \
+  -d "{
+    \"fromAccountNumber\":\"$ACCOUNT_NUM\",
+    \"toAccountNumber\":\"$ACC2_NUM\",
+    \"amount\":1500
   }" | jq
 ```
 
@@ -165,6 +176,8 @@ curl -s "http://localhost:8080/api/accounts/$ACCOUNT_ID/transactions?page=0&size
 ### 9. Swagger UI
 
 Open [http://localhost:8080/swagger-ui.html](http://localhost:8080/swagger-ui.html)
+
+Click the **Authorize** button at the top right and paste `Bearer <token>` to authenticate all requests from Swagger UI.
 
 ---
 
@@ -189,8 +202,9 @@ Open [http://localhost:8080/swagger-ui.html](http://localhost:8080/swagger-ui.ht
 ### Transactions
 
 | Method | Path | Auth | Description |
-|---|---|---|---|
-| `POST` | `/api/transactions/transfer` | Yes | Transfer between accounts |
+|---|---|---|---|---|
+| `POST` | `/api/transactions/transfer` | Yes | Transfer by account UUIDs |
+| `POST` | `/api/transactions/transfer-by-account-number` | Yes | Transfer by account numbers (friendlier) |
 
 ### Actuator / Observability
 
@@ -301,7 +315,7 @@ Push to `main` or open a PR to trigger the CI pipeline at `.github/workflows/ci.
 
 - JDK 21 setup
 - Maven build + test (with Testcontainers)
-- PostgreSQL service container
+- PostgreSQL + Redis service containers
 
 ---
 
