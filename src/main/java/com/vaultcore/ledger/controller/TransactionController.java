@@ -8,6 +8,8 @@ import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.*;
 
+import java.util.UUID;
+
 @RestController
 @RequestMapping("/api/transactions")
 @RequiredArgsConstructor
@@ -17,20 +19,27 @@ public class TransactionController {
 
     @PostMapping("/transfer")
     public TransferResponse transfer(@Valid @RequestBody TransferRequest request) {
+        String idempotencyKey = request.getIdempotencyKey() != null
+                ? request.getIdempotencyKey()
+                : "idem-" + UUID.randomUUID();
+        String referenceId = request.getReferenceId() != null
+                ? request.getReferenceId()
+                : "ref-" + UUID.randomUUID();
+
         Transaction transaction = transactionService.createTransaction(
-        request.getIdempotencyKey(),
-        request.getReferenceId(),
-        request.getAmount(),
-        request.getFromAccountId(),
-        request.getToAccountId()
-    );
+                idempotencyKey,
+                referenceId,
+                request.getAmount(),
+                request.getFromAccountId(),
+                request.getToAccountId()
+        );
 
-    TransferResponse response = new TransferResponse();
-    response.setTransactionId(transaction.getId());
-    response.setReferenceId(transaction.getReferenceId());
-    response.setAmount(transaction.getAmount());
-    response.setStatus(transaction.getStatus());
+        TransferResponse response = new TransferResponse();
+        response.setTransactionId(transaction.getId());
+        response.setReferenceId(transaction.getReferenceId());
+        response.setAmount(transaction.getAmount());
+        response.setStatus(transaction.getStatus());
 
-    return response;
+        return response;
     }
 }
