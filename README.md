@@ -69,6 +69,9 @@ flowchart TB
 
 ## Quick Start (Recruiter-Friendly)
 
+> **Live demo:** [https://vaultcore-cg6x.onrender.com/swagger-ui/index.html](https://vaultcore-cg6x.onrender.com/swagger-ui/index.html)
+> Register a user, authorize with the Bearer token, and try all endpoints instantly.
+
 ### Prerequisites
 
 - [Docker Desktop](https://docs.docker.com/get-docker/)
