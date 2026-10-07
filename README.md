@@ -106,13 +106,12 @@ Save the `token` from the response.
 ```bash
 AUTH="Authorization: Bearer <token>"
 
-# Get the user ID from the register response
-USER_ID="<userId from step 3>"
-
+# The account is created for the authenticated user (taken from the JWT).
+# The request body no longer accepts a userId.
 curl -s -X POST http://localhost:8080/api/accounts \
   -H "Content-Type: application/json" \
   -H "$AUTH" \
-  -d "{\"userId\":\"$USER_ID\",\"accountType\":\"USER\"}" | jq
+  -d '{"accountType":"USER"}' | jq
 ```
 
 Save the `id` and `accountNumber` from the response.
@@ -143,7 +142,7 @@ curl -s "http://localhost:8080/api/accounts/$ACCOUNT_ID/balance" \
 ACC2=$(curl -s -X POST http://localhost:8080/api/accounts \
   -H "Content-Type: application/json" \
   -H "$AUTH" \
-  -d "{\"userId\":\"$USER_ID\",\"accountType\":\"USER\"}" | jq)
+  -d '{"accountType":"USER"}' | jq)
 echo "$ACC2" | jq .
 ACC2_ID=$(echo "$ACC2" | jq -r '.id')
 ACC2_NUM=$(echo "$ACC2" | jq -r '.accountNumber')
@@ -199,7 +198,7 @@ Click the **Authorize** button at the top right and paste `Bearer <token>` to au
 
 | Method | Path | Auth | Description |
 |---|---|---|---|
-| `POST` | `/api/accounts` | Yes | Create an account |
+| `POST` | `/api/accounts` | Yes | Create an account for the authenticated user |
 | `GET` | `/api/accounts/{id}/balance` | Yes | Get account balance |
 | `GET` | `/api/accounts/{id}/transactions` | Yes | Transaction history (paginated) |
 | `POST` | `/api/accounts/{id}/seed` | Yes | Seed balance (demo only) |
@@ -215,9 +214,9 @@ Click the **Authorize** button at the top right and paste `Bearer <token>` to au
 
 | Method | Path | Description |
 |---|---|---|
-| `GET` | `/actuator/health` | Health check (DB + Redis) |
-| `GET` | `/actuator/metrics` | Application metrics |
-| `GET` | `/actuator/prometheus` | Prometheus scrape endpoint |
+| `GET` | `/actuator/health` | Health check (public; component details require auth) |
+| `GET` | `/actuator/metrics` | Application metrics (requires authentication) |
+| `GET` | `/actuator/prometheus` | Prometheus scrape endpoint (requires authentication) |
 
 ---
 
@@ -279,9 +278,18 @@ Every transfer creates exactly one **DEBIT** and one **CREDIT** entry. Balances 
 - **Optimistic locking** (`@Version`) on accounts
 
 ### Security
-- JWT-based stateless authentication
+- JWT-based stateless authentication — the identity is always taken from the signed token,
+  never from a client-supplied id
+- Service-layer authorization: every account operation verifies the account belongs to the
+  authenticated user (balance, history, seed, and the source of a transfer)
+- Recipients of a transfer may be any active account; only the debited account must be owned
 - BCrypt password hashing
 - Rate limiting via Redis (100 req/min per user by default)
+
+### Ledger invariants
+The test suite enforces the core accounting rules (see **Testing** below): each transfer creates
+exactly one `DEBIT` and one `CREDIT` of equal amount, and every account satisfies
+`balance == SUM(CREDITS) - SUM(DEBITS)`.
 
 ### Observability
 - Micrometer metrics at `/actuator/prometheus`
@@ -304,6 +312,33 @@ Every transfer creates exactly one **DEBIT** and one **CREDIT** entry. Balances 
 | `RATE_LIMIT_MAX_REQUESTS` | `100` | Max requests per window |
 | `RATE_LIMIT_WINDOW_MINUTES` | `1` | Rate limit window duration |
 
+> **Development defaults vs. production secrets:** every default above (the datasource username,
+> the `JWT_SECRET` development key, password-less Redis) is for local/Docker demo use only. For a
+> real deployment, inject a freshly generated random base64 `JWT_SECRET`, real database credentials,
+> and a secured Redis. All values are read from environment variables — no production secret is
+> hardcoded in the repository.
+
+---
+
+## Testing
+
+Run the full suite (PostgreSQL + Redis are provided by Testcontainers / CI service containers):
+
+```bash
+./mvnw clean verify
+```
+
+The suite asserts the ledger's invariants rather than just logging:
+
+- **Double entry:** every transfer produces exactly one `DEBIT` and one `CREDIT` of equal amount.
+- **Balance identity:** `balance == SUM(CREDITS) - SUM(DEBITS)` for each account.
+- **Concurrency:** 20 concurrent transfers of `100` against a `1000` balance produce exactly 10
+  successes and 10 failures, a final source balance of `0`, 20 matching ledger entries, and no
+  duplicated transactions.
+- **Idempotency:** repeating a key returns the original transaction and moves money once; concurrent
+  duplicate requests collapse to a single transaction (the DB unique constraint is the source of truth).
+- **Authorization:** a user cannot read, seed, or transfer from another user's account.
+
 ---
 
 ## Deployment
@@ -319,8 +354,9 @@ docker compose up -d --build
 Push to `main` or open a PR to trigger the CI pipeline at `.github/workflows/ci.yml`:
 
 - JDK 21 setup
-- Maven build + test (with Testcontainers)
+- Maven build + test (`./mvnw clean verify`, with Testcontainers)
 - PostgreSQL + Redis service containers
+- The build fails if any test fails
 
 ---
 
