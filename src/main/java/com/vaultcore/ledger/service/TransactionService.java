@@ -6,6 +6,7 @@ import com.vaultcore.ledger.domain.*;
 import com.vaultcore.ledger.repository.*;
 import jakarta.transaction.Transactional;
 import lombok.RequiredArgsConstructor;
+import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
@@ -16,6 +17,9 @@ import java.util.UUID;
 @RequiredArgsConstructor
 public class TransactionService {
 
+    private static final int MAX_IDEMPOTENCY_KEY_LENGTH = 255;
+    private static final int MAX_REFERENCE_ID_LENGTH = 50;
+
     private final TransactionRepository transactionRepository;
     private final LedgerEntryRepository ledgerEntryRepository;
     private final AccountRepository accountRepository;
@@ -25,23 +29,22 @@ public class TransactionService {
 
     @Transactional
     public Transaction createTransaction(
+            UUID ownerId,
             String idempotencyKey,
             String referenceId,
             BigDecimal amount,
             UUID fromAccountId,
             UUID toAccountId
     ) {
+        validateRequest(idempotencyKey, referenceId, amount, fromAccountId, toAccountId);
 
-        return processTransaction(
-                idempotencyKey,
-                referenceId,
-                amount,
-                fromAccountId,
-                toAccountId
-        );
+        return ledgerMetrics.recordTransactionDuration(() ->
+                processTransaction(ownerId, idempotencyKey, referenceId, amount,
+                        fromAccountId, toAccountId));
     }
 
-    public Transaction processTransaction(
+    private Transaction processTransaction(
+            UUID ownerId,
             String idempotencyKey,
             String referenceId,
             BigDecimal amount,
@@ -49,85 +52,142 @@ public class TransactionService {
             UUID toAccountId
     ) {
 
-        return ledgerMetrics.recordTransactionDuration(() -> {
+        // 1. Fast path: Redis cache. This is an optimization only; correctness is
+        // enforced by the unique constraint on transactions.idempotency_key below.
+        Optional<Transaction> cached = lookupCachedTransaction(idempotencyKey);
+        if (cached.isPresent()) {
+            ledgerMetrics.recordIdempotentHit();
+            return cached.get();
+        }
 
-            if (idempotencyCache.isDuplicate(idempotencyKey)) {
-                ledgerMetrics.recordIdempotentHit();
-                Optional<UUID> cachedId = idempotencyCache.getTransactionId(idempotencyKey);
-                if (cachedId.isPresent()) {
-                    return transactionRepository.findById(cachedId.get())
-                            .orElseThrow(() -> new IllegalArgumentException("Transaction not found"));
-                }
-            }
+        // 2. Load and validate/authorize before taking any locks.
+        Account fromAccount = accountRepository.findById(fromAccountId)
+                .orElseThrow(() -> new IllegalArgumentException("Account not found: " + fromAccountId));
+        Account toAccount = accountRepository.findById(toAccountId)
+                .orElseThrow(() -> new IllegalArgumentException("Account not found: " + toAccountId));
 
-            Optional<Transaction> existingTransaction =
-                    transactionRepository.findByIdempotencyKey(idempotencyKey);
+        if (fromAccount.getUser() == null
+                || ownerId == null
+                || !ownerId.equals(fromAccount.getUser().getId())) {
+            throw new AccessDeniedException(
+                    "Source account does not belong to the authenticated user");
+        }
 
-            if (existingTransaction.isPresent()) {
-                idempotencyCache.record(idempotencyKey, existingTransaction.get().getId());
-                ledgerMetrics.recordIdempotentHit();
-                return existingTransaction.get();
-            }
+        if (fromAccountId.equals(toAccountId)) {
+            throw new IllegalArgumentException(
+                    "Source and destination accounts must be different");
+        }
 
-            UUID firstLockId;
-            UUID secondLockId;
+        requireActive(fromAccount, "Source");
+        requireActive(toAccount, "Destination");
 
-            if (fromAccountId.compareTo(toAccountId) < 0) {
-                firstLockId = fromAccountId;
-                secondLockId = toAccountId;
-            } else {
-                firstLockId = toAccountId;
-                secondLockId = fromAccountId;
-            }
+        // 3. Deterministic lock ordering prevents deadlocks between concurrent transfers.
+        boolean fromLocksFirst = fromAccountId.compareTo(toAccountId) < 0;
+        UUID firstLockId = fromLocksFirst ? fromAccountId : toAccountId;
+        UUID secondLockId = fromLocksFirst ? toAccountId : fromAccountId;
 
-            Account firstAccount = accountRepository.findByIdWithLock(firstLockId)
-                    .orElseThrow(() -> new IllegalArgumentException("Account not found"));
+        Account firstLocked = accountRepository.findByIdWithLock(firstLockId)
+                .orElseThrow(() -> new IllegalArgumentException("Account not found: " + firstLockId));
+        Account secondLocked = accountRepository.findByIdWithLock(secondLockId)
+                .orElseThrow(() -> new IllegalArgumentException("Account not found: " + secondLockId));
 
-            Account secondAccount = accountRepository.findByIdWithLock(secondLockId)
-                    .orElseThrow(() -> new IllegalArgumentException("Account not found"));
+        fromAccount = fromLocksFirst ? firstLocked : secondLocked;
+        toAccount = fromLocksFirst ? secondLocked : firstLocked;
 
-            Account fromAccount =
-                    fromAccountId.equals(firstLockId) ? firstAccount : secondAccount;
+        // 4. Re-check idempotency AFTER acquiring the locks. Concurrent duplicate requests
+        // share the same accounts, so they serialize on these locks; the second request then
+        // observes the first request's committed transaction instead of inserting a duplicate.
+        Optional<Transaction> existing = transactionRepository.findByIdempotencyKey(idempotencyKey);
+        if (existing.isPresent()) {
+            idempotencyCache.record(idempotencyKey, existing.get().getId());
+            ledgerMetrics.recordIdempotentHit();
+            return existing.get();
+        }
 
-            Account toAccount =
-                    toAccountId.equals(firstLockId) ? firstAccount : secondAccount;
+        BigDecimal balance = balanceService.getBalance(fromAccountId);
 
-            BigDecimal balance = balanceService.getBalance(fromAccountId);
+        if (balance.compareTo(amount) < 0) {
+            ledgerMetrics.recordTransactionFailed();
+            throw new IllegalArgumentException("Insufficient balance");
+        }
 
-            if (balance.compareTo(amount) < 0) {
-                ledgerMetrics.recordTransactionFailed();
-                throw new IllegalArgumentException("Insufficient balance");
-            }
+        Transaction transaction = new Transaction();
+        transaction.setIdempotencyKey(idempotencyKey);
+        transaction.setReferenceId(referenceId);
+        transaction.setAmount(amount);
+        transaction.setStatus(TransactionStatus.PENDING);
+        transaction = transactionRepository.save(transaction);
 
-            Transaction transaction = new Transaction();
-            transaction.setIdempotencyKey(idempotencyKey);
-            transaction.setReferenceId(referenceId);
-            transaction.setAmount(amount);
-            transaction.setStatus(TransactionStatus.PENDING);
-            transaction = transactionRepository.save(transaction);
+        LedgerEntry debitEntry = new LedgerEntry();
+        debitEntry.setTransaction(transaction);
+        debitEntry.setAccount(fromAccount);
+        debitEntry.setEntryType(LedgerEntryType.DEBIT);
+        debitEntry.setAmount(amount);
+        ledgerEntryRepository.save(debitEntry);
 
-            LedgerEntry debitEntry = new LedgerEntry();
-            debitEntry.setTransaction(transaction);
-            debitEntry.setAccount(fromAccount);
-            debitEntry.setEntryType(LedgerEntryType.DEBIT);
-            debitEntry.setAmount(amount);
-            ledgerEntryRepository.save(debitEntry);
+        LedgerEntry creditEntry = new LedgerEntry();
+        creditEntry.setTransaction(transaction);
+        creditEntry.setAccount(toAccount);
+        creditEntry.setEntryType(LedgerEntryType.CREDIT);
+        creditEntry.setAmount(amount);
+        ledgerEntryRepository.save(creditEntry);
 
-            LedgerEntry creditEntry = new LedgerEntry();
-            creditEntry.setTransaction(transaction);
-            creditEntry.setAccount(toAccount);
-            creditEntry.setEntryType(LedgerEntryType.CREDIT);
-            creditEntry.setAmount(amount);
-            ledgerEntryRepository.save(creditEntry);
+        transaction.setStatus(TransactionStatus.COMPLETED);
+        transaction = transactionRepository.save(transaction);
 
-            transaction.setStatus(TransactionStatus.COMPLETED);
-            transaction = transactionRepository.save(transaction);
+        idempotencyCache.record(idempotencyKey, transaction.getId());
+        ledgerMetrics.recordTransactionCreated();
+        ledgerMetrics.recordTransactionSucceeded();
 
-            idempotencyCache.record(idempotencyKey, transaction.getId());
-            ledgerMetrics.recordTransactionCreated();
-            ledgerMetrics.recordTransactionSucceeded();
+        return transaction;
+    }
 
-            return transaction;
-        });
+    private Optional<Transaction> lookupCachedTransaction(String idempotencyKey) {
+        if (!idempotencyCache.isDuplicate(idempotencyKey)) {
+            return Optional.empty();
+        }
+        return idempotencyCache.getTransactionId(idempotencyKey)
+                .flatMap(transactionRepository::findById);
+    }
+
+    private void requireActive(Account account, String role) {
+        if (account.getStatus() != AccountStatus.ACTIVE) {
+            throw new IllegalArgumentException(
+                    role + " account is not active: " + account.getId());
+        }
+    }
+
+    private void validateRequest(
+            String idempotencyKey,
+            String referenceId,
+            BigDecimal amount,
+            UUID fromAccountId,
+            UUID toAccountId
+    ) {
+        if (amount == null || amount.compareTo(BigDecimal.ZERO) <= 0) {
+            throw new IllegalArgumentException("Amount must be greater than zero");
+        }
+
+        if (fromAccountId == null || toAccountId == null) {
+            throw new IllegalArgumentException("Source and destination accounts are required");
+        }
+
+        if (idempotencyKey == null || idempotencyKey.isBlank()) {
+            throw new IllegalArgumentException("Idempotency key is required");
+        }
+
+        if (idempotencyKey.length() > MAX_IDEMPOTENCY_KEY_LENGTH) {
+            throw new IllegalArgumentException(
+                    "Idempotency key must be at most " + MAX_IDEMPOTENCY_KEY_LENGTH + " characters");
+        }
+
+        if (referenceId == null || referenceId.isBlank()) {
+            throw new IllegalArgumentException("Reference id is required");
+        }
+
+        if (referenceId.length() > MAX_REFERENCE_ID_LENGTH) {
+            throw new IllegalArgumentException(
+                    "Reference id must be at most " + MAX_REFERENCE_ID_LENGTH + " characters");
+        }
     }
 }
