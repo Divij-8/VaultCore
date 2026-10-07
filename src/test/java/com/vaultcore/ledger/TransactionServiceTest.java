@@ -1,75 +1,135 @@
 package com.vaultcore.ledger;
-import com.vaultcore.ledger.domain.*;
-import com.vaultcore.ledger.repository.*;
-import com.vaultcore.ledger.service.*;
+
+import com.vaultcore.ledger.domain.Account;
+import com.vaultcore.ledger.domain.User;
 import org.junit.jupiter.api.Test;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.transaction.annotation.Transactional;
+
 import java.math.BigDecimal;
 import java.util.UUID;
+
 import static org.assertj.core.api.Assertions.assertThat;
-@SpringBootTest
-@Transactional
-class TransactionServiceTest {
-    @Autowired
-    private TransactionService transactionService;
-    @Autowired
-    private AccountRepository accountRepository;
-    @Autowired
-    private BalanceService balanceService;
-    @Autowired
-    private UserRepository userRepository;
-    @Autowired
-    private TransactionRepository transactionRepository;
-    @Autowired
-    private LedgerEntryRepository ledgerEntryRepository;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
+class TransactionServiceTest extends AbstractLedgerTest {
+
     @Test
     void shouldTransferMoneyCorrectly() {
-        User user = new User();
-        user.setName("Test User");
-        user.setPhoneNumber("+1" + System.currentTimeMillis());
-        user.setPassword("password");
-        user.setRoles("USER");
-        user = userRepository.save(user);
-        Account acc1 = new Account();
-        acc1.setAccountNumber("ACC" + System.nanoTime());
-        acc1.setAccountType(AccountType.USER);
-        acc1.setStatus(AccountStatus.ACTIVE);
-        acc1.setUser(user);
-        acc1 = accountRepository.save(acc1);
-        
-        Account acc2 = new Account();
-        acc2.setAccountNumber("ACC" + (System.nanoTime() + 1));
-        acc2.setAccountType(AccountType.USER);
-        acc2.setStatus(AccountStatus.ACTIVE);
-        acc2.setUser(user);
-        acc2 = accountRepository.save(acc2);
-        
-        Transaction seedTransaction = new Transaction();
-        seedTransaction.setReferenceId("seed-ref-" + UUID.randomUUID());
-        seedTransaction.setIdempotencyKey("seed-idem-" + UUID.randomUUID());
-        seedTransaction.setAmount(new BigDecimal("1000"));
-        seedTransaction.setStatus(TransactionStatus.COMPLETED);
-        seedTransaction = transactionRepository.save(seedTransaction);
-        LedgerEntry seedEntry = new LedgerEntry();
-        seedEntry.setTransaction(seedTransaction);
-        seedEntry.setAccount(acc1);
-        seedEntry.setEntryType(LedgerEntryType.CREDIT);
-        seedEntry.setAmount(new BigDecimal("1000"));
-        ledgerEntryRepository.save(seedEntry);
+        User owner = createUser();
+        Account from = createAccount(owner);
+        Account to = createAccount(owner);
+        seedBalance(owner, from, "1000");
+
         transactionService.createTransaction(
+                owner.getId(),
                 "idem-" + UUID.randomUUID(),
                 "ref-" + UUID.randomUUID(),
                 new BigDecimal("500"),
-                acc1.getId(),
-                acc2.getId()
+                from.getId(),
+                to.getId()
         );
-        
-        var balance1 = balanceService.getBalance(acc1.getId());
-        var balance2 = balanceService.getBalance(acc2.getId());
-        
-        assertThat(balance1).isEqualByComparingTo(new BigDecimal("500"));
-        assertThat(balance2).isEqualByComparingTo(new BigDecimal("500"));
+
+        assertThat(balanceService.getBalance(from.getId())).isEqualByComparingTo(new BigDecimal("500"));
+        assertThat(balanceService.getBalance(to.getId())).isEqualByComparingTo(new BigDecimal("500"));
+    }
+
+    @Test
+    void rejectsNonPositiveAmount() {
+        User owner = createUser();
+        Account from = createAccount(owner);
+        Account to = createAccount(owner);
+
+        assertThatThrownBy(() -> transactionService.createTransaction(
+                owner.getId(), "idem-" + UUID.randomUUID(), "ref-" + UUID.randomUUID(),
+                BigDecimal.ZERO, from.getId(), to.getId()))
+                .isInstanceOf(IllegalArgumentException.class);
+
+        assertThatThrownBy(() -> transactionService.createTransaction(
+                owner.getId(), "idem-" + UUID.randomUUID(), "ref-" + UUID.randomUUID(),
+                new BigDecimal("-10"), from.getId(), to.getId()))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    void rejectsNullAmount() {
+        User owner = createUser();
+        Account from = createAccount(owner);
+        Account to = createAccount(owner);
+
+        assertThatThrownBy(() -> transactionService.createTransaction(
+                owner.getId(), "idem-" + UUID.randomUUID(), "ref-" + UUID.randomUUID(),
+                null, from.getId(), to.getId()))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    void rejectsSelfTransfer() {
+        User owner = createUser();
+        Account account = createAccount(owner);
+        seedBalance(owner, account, "100");
+
+        assertThatThrownBy(() -> transactionService.createTransaction(
+                owner.getId(), "idem-" + UUID.randomUUID(), "ref-" + UUID.randomUUID(),
+                new BigDecimal("10"), account.getId(), account.getId()))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("must be different");
+    }
+
+    @Test
+    void rejectsNonexistentAccount() {
+        User owner = createUser();
+        Account account = createAccount(owner);
+        seedBalance(owner, account, "100");
+
+        assertThatThrownBy(() -> transactionService.createTransaction(
+                owner.getId(), "idem-" + UUID.randomUUID(), "ref-" + UUID.randomUUID(),
+                new BigDecimal("10"), account.getId(), UUID.randomUUID()))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("not found");
+    }
+
+    @Test
+    void rejectsBlankOrOversizedIdempotencyKey() {
+        User owner = createUser();
+        Account from = createAccount(owner);
+        Account to = createAccount(owner);
+
+        assertThatThrownBy(() -> transactionService.createTransaction(
+                owner.getId(), "  ", "ref-" + UUID.randomUUID(),
+                new BigDecimal("10"), from.getId(), to.getId()))
+                .isInstanceOf(IllegalArgumentException.class);
+
+        assertThatThrownBy(() -> transactionService.createTransaction(
+                owner.getId(), "k".repeat(256), "ref-" + UUID.randomUUID(),
+                new BigDecimal("10"), from.getId(), to.getId()))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    void rejectsOversizedReferenceId() {
+        User owner = createUser();
+        Account from = createAccount(owner);
+        Account to = createAccount(owner);
+
+        assertThatThrownBy(() -> transactionService.createTransaction(
+                owner.getId(), "idem-" + UUID.randomUUID(), "r".repeat(51),
+                new BigDecimal("10"), from.getId(), to.getId()))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    void rejectsTransferWhenBalanceInsufficient() {
+        User owner = createUser();
+        Account from = createAccount(owner);
+        Account to = createAccount(owner);
+        seedBalance(owner, from, "50");
+
+        assertThatThrownBy(() -> transactionService.createTransaction(
+                owner.getId(), "idem-" + UUID.randomUUID(), "ref-" + UUID.randomUUID(),
+                new BigDecimal("100"), from.getId(), to.getId()))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Insufficient balance");
+
+        assertThat(balanceService.getBalance(from.getId())).isEqualByComparingTo("50");
+        assertThat(balanceService.getBalance(to.getId())).isEqualByComparingTo("0");
     }
 }
