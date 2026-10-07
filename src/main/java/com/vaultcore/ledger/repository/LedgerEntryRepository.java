@@ -6,8 +6,10 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 
 import java.math.BigDecimal;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -29,4 +31,15 @@ public interface LedgerEntryRepository extends JpaRepository<LedgerEntry, UUID> 
     """)
     Optional<LedgerEntry> findCounterpartyByTransactionIdAndAccountId(
             UUID transactionId, UUID accountId);
+
+    @Query("""
+        SELECT le FROM LedgerEntry le
+        JOIN FETCH le.account
+        WHERE le.transaction.id = :transactionId
+    """)
+    List<LedgerEntry> findByTransactionIdWithAccount(@Param("transactionId") UUID transactionId);
+
+    long countByTransaction_Id(UUID transactionId);
+
+    long countByAccount_IdAndEntryType(UUID accountId, LedgerEntryType entryType);
 }
