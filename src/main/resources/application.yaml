@@ -8,6 +8,8 @@ spring:
   jpa:
     hibernate:
       ddl-auto: none
+    # Lazy associations are resolved inside transactional service methods, not the view layer.
+    open-in-view: false
   flyway:
     enabled: ${SPRING_FLYWAY_ENABLED:true}
   data:
@@ -29,7 +31,8 @@ management:
         include: health,info,prometheus,metrics
   endpoint:
     health:
-      show-details: always
+      # Details (DB/Redis component status) are only shown to authenticated callers.
+      show-details: when-authorized
   metrics:
     tags:
       application: ${spring.application.name}
@@ -39,6 +42,7 @@ management:
 
 app:
   jwt:
+    # DEVELOPMENT DEFAULT ONLY. Override JWT_SECRET in every real environment.
     secret: ${JWT_SECRET:Yn2kjibddFAWtnPJ2AFlL8WXmohJMCvigQggaEypa5E=}
     expiration: ${JWT_EXPIRATION:86400000}
   ratelimit:
